@@ -3,29 +3,109 @@
 import { useState } from 'react';
 import { ArrowLeft, Plus, Zap, XCircle, CheckCircle, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { ethers } from 'ethers';
-import { CONTRACTS, INTENT_MANAGER_ABI } from '@/lib/contracts';
-
-declare global {
-  interface Window {
-    ethereum?: any;
-  }
-}
+import { useAccount, useDisconnect, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi';
+import { parseEther } from 'viem';
+import { CONTRACTS, INTENT_MANAGER_ABI, CHUNK_EXECUTOR_ABI } from '@/lib/contracts';
 
 export default function DAppPage() {
   const [activeTab, setActiveTab] = useState<'create' | 'execute' | 'manage'>('create');
-  const [address, setAddress] = useState<string>('');
-  const [isConnected, setIsConnected] = useState(false);
-  const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null);
-  const [signer, setSigner] = useState<ethers.Signer | null>(null);
+  const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
+  const [chunkAmount, setChunkAmount] = useState('');
   
-  // Transaction states
-  const [isPending, setIsPending] = useState(false);
-  const [isConfirming, setIsConfirming] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-  const [txHash, setTxHash] = useState('');
-  const [error, setError] = useState<string>('');
-  const [nextIntentId, setNextIntentId] = useState<number>(0);
+  // Wagmi hooks
+  const { address, isConnected } = useAccount();
+  const { disconnect } = useDisconnect();
+  const { data: hash, writeContract, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+  
+  // Read contract - total intents
+  const { data: nextIntentId, refetch: refetchNextId } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'nextIntentId',
+  });
+
+  // Read up to 20 intents (fixed number for hooks rules)
+  const { data: intent0 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(0)],
+  });
+  const { data: intent1 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(1)],
+  });
+  const { data: intent2 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(2)],
+  });
+  const { data: intent3 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(3)],
+  });
+  const { data: intent4 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(4)],
+  });
+  const { data: intent5 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(5)],
+  });
+  const { data: intent6 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(6)],
+  });
+  const { data: intent7 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(7)],
+  });
+  const { data: intent8 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(8)],
+  });
+  const { data: intent9 } = useReadContract({
+    address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+    abi: INTENT_MANAGER_ABI,
+    functionName: 'getIntent',
+    args: [BigInt(9)],
+  });
+
+  // Combine into array and filter valid intents
+  const totalIntents = nextIntentId ? Number(nextIntentId) : 0;
+  const allIntentData = [
+    intent0, intent1, intent2, intent3, intent4,
+    intent5, intent6, intent7, intent8, intent9
+  ];
+  
+  const intents = allIntentData
+    .slice(0, totalIntents)
+    .map((data, id) => ({ id, data }))
+    .filter(intent => intent.data);
+
+  // Filter user's intents
+  const userIntents = intents.filter(
+    (intent) => intent.data && intent.data.lp.toLowerCase() === address?.toLowerCase()
+  );
+
+  // Filter active intents (for execution)
+  const activeIntents = intents.filter((intent) => intent.data && intent.data.active);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -37,168 +117,57 @@ export default function DAppPage() {
     maxChunk: '',
   });
 
-  // Connect wallet
-  const connectWallet = async () => {
-    console.log('Connect wallet clicked');
-    try {
-      if (typeof window === 'undefined') {
-        console.error('Window is undefined');
-        return;
-      }
-
-      // Check for wallet providers
-      const ethereum = window.ethereum;
-      if (!ethereum) {
-        alert('Please install MetaMask or Backpack wallet!');
-        console.error('No wallet found');
-        return;
-      }
-
-      console.log('Requesting accounts...');
-      
-      // Request accounts - works for both MetaMask and Backpack
-      let accounts;
-      try {
-        accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-      } catch (e: any) {
-        console.error('Failed to request accounts:', e);
-        alert('Failed to connect wallet. Please try again.');
-        return;
-      }
-      
-      console.log('Accounts:', accounts);
-      
-      if (!accounts || accounts.length === 0) {
-        alert('No accounts found. Please unlock your wallet.');
-        return;
-      }
-
-      const provider = new ethers.BrowserProvider(ethereum);
-      const signer = await provider.getSigner();
-      console.log('Signer obtained');
-      
-      // Check network
-      let network;
-      try {
-        network = await provider.getNetwork();
-        console.log('Network:', network.chainId);
-      } catch (e: any) {
-        console.error('Failed to get network:', e);
-        // Continue anyway for Backpack
-        setProvider(provider);
-        setSigner(signer);
-        setAddress(accounts[0]);
-        setIsConnected(true);
-        console.log('Connected (skipped network check)');
-        await fetchNextIntentId(provider);
-        return;
-      }
-      
-      if (network.chainId !== BigInt(11155111)) {
-        const switchNetwork = confirm('You are not on Sepolia network. Switch now?');
-        if (switchNetwork) {
-          try {
-            await ethereum.request({
-              method: 'wallet_switchEthereumChain',
-              params: [{ chainId: '0xaa36a7' }], // Sepolia
-            });
-            // Reconnect after switch
-            setTimeout(() => window.location.reload(), 1000);
-          } catch (switchError: any) {
-            console.error('Switch error:', switchError);
-            if (switchError.code === 4902) {
-              alert('Please add Sepolia network to your wallet manually.');
-            }
-          }
-        }
-        return;
-      }
-
-      setProvider(provider);
-      setSigner(signer);
-      setAddress(accounts[0]);
-      setIsConnected(true);
-      console.log('Connected successfully!');
-      
-      // Read nextIntentId
-      await fetchNextIntentId(provider);
-    } catch (err: any) {
-      console.error('Error connecting wallet:', err);
-      alert('Error connecting wallet. Please try MetaMask instead.');
-      setError(err.message);
-    }
-  };
-
-  // Fetch nextIntentId
-  const fetchNextIntentId = async (prov?: ethers.BrowserProvider) => {
-    try {
-      const p = prov || provider;
-      if (!p) return;
-      
-      const contract = new ethers.Contract(
-        CONTRACTS.sepolia.IntentManager,
-        INTENT_MANAGER_ABI,
-        p
-      );
-      const id = await contract.nextIntentId();
-      setNextIntentId(Number(id));
-    } catch (err) {
-      console.error('Error reading nextIntentId:', err);
-    }
-  };
-
-  // Handle create intent
   const handleCreateIntent = async () => {
     if (!formData.totalLiquidity || !formData.maxChunk) {
       alert('Please fill in all fields');
       return;
     }
 
-    if (!signer) {
-      alert('Please connect wallet first');
-      return;
-    }
-
-    setError('');
-    setIsSuccess(false);
-    setIsPending(true);
-
-    try {
-      const contract = new ethers.Contract(
-        CONTRACTS.sepolia.IntentManager,
-        INTENT_MANAGER_ABI,
-        signer
-      );
-
-      const tx = await contract.createIntent(
+    writeContract({
+      address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+      abi: INTENT_MANAGER_ABI,
+      functionName: 'createIntent',
+      args: [
         {
-          currency0: formData.token0,
-          currency1: formData.token1,
+          currency0: formData.token0 as `0x${string}`,
+          currency1: formData.token1 as `0x${string}`,
           fee: 3000,
           tickSpacing: 60,
-          hooks: '0x0000000000000000000000000000000000000000',
+          hooks: '0x0000000000000000000000000000000000000000' as `0x${string}`,
         },
         parseInt(formData.tickLower),
         parseInt(formData.tickUpper),
-        ethers.parseEther(formData.totalLiquidity),
-        ethers.parseEther(formData.maxChunk)
-      );
+        parseEther(formData.totalLiquidity),
+        parseEther(formData.maxChunk),
+      ],
+    }, {
+      onSuccess: () => {
+        refetchNextId(); // Refresh the intent count
+      }
+    });
+  };
 
-      setIsPending(false);
-      setIsConfirming(true);
-      setTxHash(tx.hash);
-
-      await tx.wait();
-      
-      setIsConfirming(false);
-      setIsSuccess(true);
-      await fetchNextIntentId();
-    } catch (err: any) {
-      console.error('Error creating intent:', err);
-      setError(err.message || 'Transaction failed');
-      setIsPending(false);
-      setIsConfirming(false);
+  const handleExecuteChunk = async (intentId: number) => {
+    if (!chunkAmount) {
+      alert('Please enter chunk amount');
+      return;
     }
+
+    writeContract({
+      address: CONTRACTS.sepolia.ChunkExecutor as `0x${string}`,
+      abi: CHUNK_EXECUTOR_ABI,
+      functionName: 'executeChunk',
+      args: [BigInt(intentId), parseEther(chunkAmount)],
+    });
+  };
+
+  const handleCancelIntent = async (intentId: number) => {
+    writeContract({
+      address: CONTRACTS.sepolia.IntentManager as `0x${string}`,
+      abi: INTENT_MANAGER_ABI,
+      functionName: 'cancelIntent',
+      args: [BigInt(intentId)],
+    });
   };
 
   return (
@@ -211,15 +180,18 @@ export default function DAppPage() {
         </Link>
 
         {!isConnected ? (
-          <button 
-            onClick={connectWallet}
-            className="bg-[#5D5DFF] text-white px-6 py-3 font-bold uppercase text-sm border-2 border-white shadow-[4px_4px_0px_0px_#000] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
-          >
-            Connect Wallet
-          </button>
+          <appkit-button />
         ) : (
-          <div className="bg-[#1A1A1A] border-2 border-[#00FFC2] px-6 py-3 font-mono text-sm">
-            <span className="text-[#00FFC2]">●</span> {address.slice(0, 6)}...{address.slice(-4)}
+          <div className="flex items-center gap-4">
+            <div className="bg-[#1A1A1A] border-2 border-[#00FFC2] px-6 py-3 font-mono text-sm">
+              <span className="text-[#00FFC2]">●</span> {address?.slice(0, 6)}...{address?.slice(-4)}
+            </div>
+            <button 
+              onClick={() => disconnect()}
+              className="bg-[#FF5D5D] text-white px-4 py-3 font-bold uppercase text-xs border-2 border-white"
+            >
+              Disconnect
+            </button>
           </div>
         )}
       </nav>
@@ -351,14 +323,22 @@ export default function DAppPage() {
                   {isSuccess && (
                     <div className="bg-[#00FFC2] text-black p-4 font-bold flex items-center gap-2 mt-4">
                       <CheckCircle className="w-5 h-5" />
-                      Intent Created! Transaction: {txHash.slice(0, 10)}...
+                      Intent Created! 
+                      <a 
+                        href={`https://sepolia.etherscan.io/tx/${hash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline ml-1"
+                      >
+                        View on Etherscan: {hash?.slice(0, 10)}...
+                      </a>
                     </div>
                   )}
                   
                   {error && (
                     <div className="bg-[#FF5D5D] text-white p-4 font-bold flex items-center gap-2 mt-4">
                       <XCircle className="w-5 h-5" />
-                      Error: {error.slice(0, 100)}...
+                      Error: {error.message.slice(0, 100)}...
                     </div>
                   )}
                 </div>
@@ -368,22 +348,207 @@ export default function DAppPage() {
             {activeTab === 'execute' && (
               <div className="bg-[#121212] border-2 border-[#333] p-8">
                 <h2 className="text-3xl font-black uppercase mb-8">Execute Chunks</h2>
-                <div className="text-center py-12 text-[#666]">
-                  <Zap className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <p className="font-bold uppercase">No Active Intents</p>
-                  <p className="text-sm mt-2">Execute chunks for any active intent</p>
-                </div>
+                
+                {activeIntents.length === 0 ? (
+                  <div className="text-center py-12 text-[#666]">
+                    <Zap className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <p className="font-bold uppercase">No Active Intents</p>
+                    <p className="text-sm mt-2">Execute chunks for any active intent</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {activeIntents.map((intent) => {
+                      if (!intent.data) return null;
+                      const progress = Number(intent.data.executedLiquidity) / Number(intent.data.totalLiquidity) * 100;
+                      const remaining = Number(intent.data.totalLiquidity) - Number(intent.data.executedLiquidity);
+                      
+                      return (
+                        <div key={intent.id} className="bg-black border-2 border-[#00FFC2] p-6">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <div className="text-xl font-black text-[#00FFC2]">INTENT #{intent.id}</div>
+                              <div className="text-xs text-[#666] mt-1">
+                                LP: {intent.data.lp.slice(0, 6)}...{intent.data.lp.slice(-4)}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-2xl font-black">{progress.toFixed(1)}%</div>
+                              <div className="text-xs text-[#666]">Complete</div>
+                            </div>
+                          </div>
+
+                          <div className="mb-4">
+                            <div className="flex justify-between text-xs mb-2">
+                              <span className="text-[#666]">Progress</span>
+                              <span className="font-mono">{(Number(intent.data.executedLiquidity) / 1e18).toFixed(4)} / {(Number(intent.data.totalLiquidity) / 1e18).toFixed(4)}</span>
+                            </div>
+                            <div className="w-full bg-[#1A1A1A] h-2 border border-[#333]">
+                              <div className="bg-[#00FFC2] h-full" style={{ width: `${progress}%` }} />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 text-xs mb-4">
+                            <div>
+                              <div className="text-[#666]">Token Pair</div>
+                              <div className="font-mono text-[#00FFC2] text-[10px]">
+                                {intent.data.pool.currency0.slice(0, 8)}... / {intent.data.pool.currency1.slice(0, 8)}...
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[#666]">Tick Range</div>
+                              <div className="font-mono">{intent.data.tickLower} → {intent.data.tickUpper}</div>
+                            </div>
+                            <div>
+                              <div className="text-[#666]">Max Chunk</div>
+                              <div className="font-mono">{(Number(intent.data.maxChunk) / 1e18).toFixed(4)}</div>
+                            </div>
+                            <div>
+                              <div className="text-[#666]">Remaining</div>
+                              <div className="font-mono">{(remaining / 1e18).toFixed(4)}</div>
+                            </div>
+                          </div>
+
+                          {selectedIntent === intent.id ? (
+                            <div className="space-y-3">
+                              <input
+                                type="number"
+                                value={chunkAmount}
+                                onChange={(e) => setChunkAmount(e.target.value)}
+                                placeholder={`Max: ${(Number(intent.data.maxChunk) / 1e18).toFixed(4)}`}
+                                className="w-full bg-[#0A0A0A] border-2 border-[#00FFC2] px-4 py-2 font-mono text-sm"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleExecuteChunk(intent.id)}
+                                  disabled={isPending || isConfirming}
+                                  className="flex-1 bg-[#00FFC2] text-black px-4 py-2 font-black uppercase text-xs disabled:opacity-50"
+                                >
+                                  {isPending || isConfirming ? 'Executing...' : 'Execute'}
+                                </button>
+                                <button
+                                  onClick={() => setSelectedIntent(null)}
+                                  className="px-4 py-2 border-2 border-[#666] font-bold uppercase text-xs"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setSelectedIntent(intent.id)}
+                              className="w-full bg-[#00FFC2] text-black px-6 py-3 font-black uppercase text-sm border-2 border-white hover:bg-[#00DD9F]"
+                            >
+                              <Zap className="w-4 h-4 inline mr-2" />
+                              Execute Chunk
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
             {activeTab === 'manage' && (
               <div className="bg-[#121212] border-2 border-[#333] p-8">
                 <h2 className="text-3xl font-black uppercase mb-8">Your Intents</h2>
-                <div className="text-center py-12 text-[#666]">
-                  <XCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <p className="font-bold uppercase">No Active Intents</p>
-                  <p className="text-sm mt-2">Create your first intent to get started</p>
-                </div>
+                
+                {userIntents.length === 0 ? (
+                  <div className="text-center py-12 text-[#666]">
+                    <XCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <p className="font-bold uppercase">No Active Intents</p>
+                    <p className="text-sm mt-2">Create your first intent to get started</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {userIntents.map((intent) => {
+                      if (!intent.data) return null;
+                      const progress = Number(intent.data.executedLiquidity) / Number(intent.data.totalLiquidity) * 100;
+                      const isComplete = progress >= 100;
+                      
+                      return (
+                        <div key={intent.id} className={`bg-black border-2 p-6 ${intent.data.active ? 'border-[#5D5DFF]' : 'border-[#666]'}`}>
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <div className="flex items-center gap-3">
+                                <div className="text-xl font-black text-[#5D5DFF]">INTENT #{intent.id}</div>
+                                {intent.data.active ? (
+                                  <span className="bg-[#00FFC2] text-black px-2 py-1 text-[10px] font-black">ACTIVE</span>
+                                ) : (
+                                  <span className="bg-[#666] text-white px-2 py-1 text-[10px] font-black">CANCELLED</span>
+                                )}
+                                {isComplete && (
+                                  <span className="bg-[#FFD700] text-black px-2 py-1 text-[10px] font-black">COMPLETE</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-[#666] mt-1 font-mono">
+                                Created by you
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-2xl font-black">{progress.toFixed(1)}%</div>
+                              <div className="text-xs text-[#666]">Executed</div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                              <div className="text-xs text-[#666] mb-1">Token 0</div>
+                              <div className="font-mono text-xs bg-[#1A1A1A] px-3 py-2 border border-[#333]">
+                                {intent.data.pool.currency0.slice(0, 10)}...
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-[#666] mb-1">Token 1</div>
+                              <div className="font-mono text-xs bg-[#1A1A1A] px-3 py-2 border border-[#333]">
+                                {intent.data.pool.currency1.slice(0, 10)}...
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-3 text-xs mb-4">
+                            <div>
+                              <div className="text-[#666]">Tick Range</div>
+                              <div className="font-mono font-bold">{intent.data.tickLower} → {intent.data.tickUpper}</div>
+                            </div>
+                            <div>
+                              <div className="text-[#666]">Total Liquidity</div>
+                              <div className="font-mono font-bold">{(Number(intent.data.totalLiquidity) / 1e18).toFixed(4)}</div>
+                            </div>
+                            <div>
+                              <div className="text-[#666]">Max Chunk</div>
+                              <div className="font-mono font-bold">{(Number(intent.data.maxChunk) / 1e18).toFixed(4)}</div>
+                            </div>
+                          </div>
+
+                          <div className="mb-4">
+                            <div className="flex justify-between text-xs mb-2">
+                              <span className="text-[#666]">Execution Progress</span>
+                              <span className="font-mono">
+                                {(Number(intent.data.executedLiquidity) / 1e18).toFixed(4)} / {(Number(intent.data.totalLiquidity) / 1e18).toFixed(4)}
+                              </span>
+                            </div>
+                            <div className="w-full bg-[#1A1A1A] h-3 border border-[#333]">
+                              <div className="bg-[#5D5DFF] h-full transition-all" style={{ width: `${progress}%` }} />
+                            </div>
+                          </div>
+
+                          {intent.data.active && !isComplete && (
+                            <button
+                              onClick={() => handleCancelIntent(intent.id)}
+                              disabled={isPending || isConfirming}
+                              className="w-full bg-[#FF5D5D] text-white px-6 py-3 font-black uppercase text-sm border-2 border-white hover:bg-[#DD3D3D] disabled:opacity-50"
+                            >
+                              <XCircle className="w-4 h-4 inline mr-2" />
+                              {isPending || isConfirming ? 'Cancelling...' : 'Cancel Intent'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -394,7 +559,7 @@ export default function DAppPage() {
               <h3 className="text-xs font-black uppercase text-[#666] mb-4">Protocol Stats</h3>
               <div className="space-y-4">
                 <div>
-                  <div className="text-2xl font-black text-[#5D5DFF]">{nextIntentId}</div>
+                  <div className="text-2xl font-black text-[#5D5DFF]">{nextIntentId ? Number(nextIntentId).toString() : '0'}</div>
                   <div className="text-xs text-[#666] uppercase">Total Intents</div>
                 </div>
                 <div>

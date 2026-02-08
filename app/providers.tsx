@@ -1,13 +1,42 @@
-"use client";
+'use client'
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { wagmiAdapter, projectId } from '@/config'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createAppKit } from '@reown/appkit/react'
+import { sepolia } from '@reown/appkit/networks'
+import React, { type ReactNode } from 'react'
+import { cookieToInitialState, WagmiProvider, type Config } from 'wagmi'
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient()
 
-export function Providers({ children }: { children: React.ReactNode }) {
+if (!projectId) {
+  throw new Error('Project ID is not defined')
+}
+
+const metadata = {
+  name: 'LIP Protocol',
+  description: 'Liquidity Intent Protocol for Uniswap v4',
+  url: 'https://lip-protocol.com',
+  icons: ['https://avatars.githubusercontent.com/u/179229932']
+}
+
+createAppKit({
+  adapters: [wagmiAdapter],
+  projectId,
+  networks: [sepolia],
+  defaultNetwork: sepolia,
+  metadata: metadata,
+  features: {
+    analytics: true
+  }
+})
+
+export function Providers({ children, cookies }: { children: ReactNode; cookies: string | null }) {
+  const initialState = cookieToInitialState(wagmiAdapter.wagmiConfig as Config, cookies)
+
   return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
-  );
+    <WagmiProvider config={wagmiAdapter.wagmiConfig as Config} initialState={initialState}>
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    </WagmiProvider>
+  )
 }
